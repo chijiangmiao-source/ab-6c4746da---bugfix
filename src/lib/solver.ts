@@ -13,12 +13,7 @@
  *   - 深度×区间矩阵：逐格统计该倒位在多少最短方案的该深度出现。
  */
 
-import {
-  adjacencyBreakpointCount,
-  decodeState,
-  encodeState,
-  type Token,
-} from './permutation';
+import { decodeState, encodeState, type Token } from './permutation';
 
 /** 一次倒位：1 基闭区间 [start,end]；反转次序并翻转符号。 */
 export interface InversionStep {
@@ -106,60 +101,57 @@ export function solve(initial: Token[]): AuditResult {
   }
 
   /* ------------------------------------------------------------------ *
-   * 1) 前向搜索：每一步选择相邻断点数最小的未访问倒位。
-   *    同分时按区间下标对的字典序决定下一状态。
+   * 1) 前向 BFS（初始态出发）：distF 为最短距离；邻居按 (i,j) 字典序
+   *    枚举，首次到达各状态的父边即构成字典序最小的最短方案。
+   *    目标所在层的前一层展开完毕后即可停止（更深层状态不可能
+   *    位于任何最短路径上）。
    * ------------------------------------------------------------------ */
-  const distF = new Map<number, number>();
+  const distF = new Map<number, number>([[startCode, 0]]);
   const parent = new Map<number, { code: number; start: number; end: number }>();
+  let distance = -1;
   {
-    const seen = new Set<number>([startCode]);
-    const chain: number[] = [startCode];
-    let code = startCode;
-    distF.set(startCode, 0);
-    while (code !== goalCode) {
-      const selection: {
-        value?: { code: number; start: number; end: number; breakpointCount: number };
-      } = {};
+    const queue: number[] = [startCode];
+    for (let head = 0; head < queue.length; head += 1) {
+      const code = queue[head];
+      const d = distF.get(code)!;
+      if (distance >= 0 && d >= distance) break;
       eachNeighbor(code, n, (nextCode, start, end) => {
-        if (seen.has(nextCode)) return;
-        const breakpointCount = adjacencyBreakpointCount(decodeState(nextCode, n));
-        const choice = selection.value;
-        if (
-          !choice ||
-          breakpointCount < choice.breakpointCount ||
-          (breakpointCount === choice.breakpointCount &&
-            (start < choice.start ||
-              (start === choice.start && end < choice.end)))
-        ) {
-          selection.value = { code: nextCode, start, end, breakpointCount };
-        }
+        if (distF.has(nextCode)) return;
+        distF.set(nextCode, d + 1);
+        parent.set(nextCode, { code, start, end });
+        if (nextCode === goalCode) distance = d + 1;
+        queue.push(nextCode);
       });
-      const choice = selection.value;
-      if (!choice) break;
-      const depth = chain.length;
-      parent.set(choice.code, { code, start: choice.start, end: choice.end });
-      distF.set(choice.code, depth);
-      seen.add(choice.code);
-      chain.push(choice.code);
-      code = choice.code;
-    }
-
-    for (let depth = 0; depth < chain.length; depth += 1) {
-      distF.set(chain[depth], depth);
     }
   }
 
-  const distance = distF.get(goalCode)!;
-
   /* ------------------------------------------------------------------ *
-   * 2) 反向汇总当前前向轨迹的后缀方案数。
+   * 2) 反向 BFS（目标态出发）：只保留位于某条最短路径上的状态
+   *    （distF + distR === distance），并在逐层推进时同步做方案数 DP：
+   *    waysToGoal(u) = Σ waysToGoal(v)，v 为 u 的下一层最短邻居。
+   *    同层状态全部出队后下一层状态才开始出队，因此每个状态被展开时
+   *    其计数已完整（bigint 任意精度）。
    * ------------------------------------------------------------------ */
-  const distR = new Map<number, number>();
-  const waysToGoal = new Map<number, bigint>();
+  const distR = new Map<number, number>([[goalCode, 0]]);
+  const waysToGoal = new Map<number, bigint>([[goalCode, 1n]]);
   {
-    for (const [code, depth] of distF) {
-      distR.set(code, distance - depth);
-      waysToGoal.set(code, 1n);
+    const queue: number[] = [goalCode];
+    for (let head = 0; head < queue.length; head += 1) {
+      const code = queue[head];
+      const k = distR.get(code)!;
+      if (k >= distance) continue; // 最短路径上的状态 distR 不超过 distance
+      const ways = waysToGoal.get(code)!;
+      eachNeighbor(code, n, (nextCode) => {
+        const known = distR.get(nextCode);
+        if (known !== undefined && known !== k + 1) return;
+        // 不在任何最短路径上的状态直接剪枝。
+        if (distF.get(nextCode) !== distance - k - 1) return;
+        if (known === undefined) {
+          distR.set(nextCode, k + 1);
+          queue.push(nextCode);
+        }
+        waysToGoal.set(nextCode, (waysToGoal.get(nextCode) ?? 0n) + ways);
+      });
     }
   }
 

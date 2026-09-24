@@ -1,7 +1,9 @@
 /**
  * verify 一次性服务中的需求核查（业务断言，与单元测试分开、输出可读）：
  *   1) [1,-3,-2,4] 的最短步数必须为 1（且唯一最短倒位为 [2,3]）；
- *   2) 重复绝对值必须被校验拒绝（输入不保留给求解器）。
+ *   2) 七标记场景 [+7,-5,-3,-2,-4,-6,+1]：最短步数 6、方案总数 217、
+ *      规范倒位序列 [1,2] [1,1] [2,7] [2,4] [3,6] [1,5]，且矩阵逐层守恒；
+ *   3) 重复绝对值必须被校验拒绝（输入不保留给求解器）。
  * 任一断言失败即以非零退出码结束容器。
  */
 import { encodeToken, validatePermutation } from '../src/lib/permutation';
@@ -37,7 +39,47 @@ function check(name: string, ok: boolean, detail = '') {
   }
 }
 
-// 2) 重复绝对值被拒绝（同号重复、异号重复各一例）
+// 2) 七标记场景：6 步、217 条最短方案、规范序列与矩阵逐层守恒
+{
+  const values = [7, -5, -3, -2, -4, -6, 1];
+  const { tokens, errors } = validatePermutation(values.join(','));
+  check('[+7,-5,-3,-2,-4,-6,+1] 通过输入校验', tokens !== undefined && errors.length === 0);
+  if (tokens) {
+    const r = solve(tokens);
+    check('[+7,-5,-3,-2,-4,-6,+1] 最短步数为 6', r.distance === 6, `实际为 ${r.distance}`);
+    check(
+      '[+7,-5,-3,-2,-4,-6,+1] 最短方案总数为 217',
+      r.totalPaths === 217n,
+      `实际为 ${r.totalPaths}`,
+    );
+    const expected = [
+      [1, 2],
+      [1, 1],
+      [2, 7],
+      [2, 4],
+      [3, 6],
+      [1, 5],
+    ];
+    check(
+      '[+7,-5,-3,-2,-4,-6,+1] 规范倒位序列正确',
+      r.canonical.steps.length === expected.length &&
+        r.canonical.steps.every(
+          (s, k) => s.start === expected[k][0] && s.end === expected[k][1],
+        ),
+      `实际为 ${JSON.stringify(r.canonical.steps)}`,
+    );
+    check(
+      '[+7,-5,-3,-2,-4,-6,+1] 矩阵逐层计数守恒（每层之和均为 217）',
+      r.matrix.length === 6 &&
+        r.matrix.every(
+          (layer) =>
+            layer.intervals.reduce((acc, c) => acc + c.pathCount, 0n) === 217n,
+        ),
+    );
+  }
+}
+
+// 3) 重复绝对值被拒绝（同号重复、异号重复各一例）
 for (const raw of ['1,1,3', '1,-1,2', '2,2,2']) {
   const { tokens, errors } = validatePermutation(raw);
   check(

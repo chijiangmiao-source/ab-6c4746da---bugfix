@@ -117,6 +117,67 @@ describe('需求用例 [1,-3,-2,4]', () => {
   });
 });
 
+describe('七标记场景 [+7,-5,-3,-2,-4,-6,+1]', () => {
+  const values = [7, -5, -3, -2, -4, -6, 1];
+  const expectedSteps: InversionStep[] = [
+    { start: 1, end: 2 },
+    { start: 1, end: 1 },
+    { start: 2, end: 7 },
+    { start: 2, end: 4 },
+    { start: 3, end: 6 },
+    { start: 1, end: 5 },
+  ];
+
+  it('最短步数为 6，全部最短方案精确总数为 217', () => {
+    const r = solve(tokensOf(values));
+    expect(r.distance).toBe(6);
+    expect(r.totalPaths).toBe(217n);
+  });
+
+  it('规范倒位序列为 [1,2] [1,1] [2,7] [2,4] [3,6] [1,5]', () => {
+    const r = solve(tokensOf(values));
+    expect(r.canonical.steps).toEqual(expectedSteps);
+  });
+
+  it('规范轨迹每步状态连贯，并最终到达全正顺序', () => {
+    const r = solve(tokensOf(values));
+    const { states, steps } = r.canonical;
+    expect(states.length).toBe(steps.length + 1);
+    expect(signedOf(states[0])).toEqual(values);
+    for (let k = 0; k < steps.length; k += 1) {
+      const advanced = applyInversion(states[k], steps[k].start - 1, steps[k].end - 1);
+      expect(signedOf(advanced)).toEqual(signedOf(states[k + 1]));
+    }
+    expect(signedOf(states[states.length - 1])).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('深度×区间矩阵基于全部 217 条最短方案，逐层计数守恒', () => {
+    const r = solve(tokensOf(values));
+    expect(r.matrix.length).toBe(6);
+    for (const layer of r.matrix) {
+      let sum = 0n;
+      for (const cell of layer.intervals) {
+        sum += cell.pathCount;
+        // 分类与计数必须一致：all=全覆盖，none=零出现，some=严格介于其间。
+        if (cell.presence === 'all') expect(cell.pathCount).toBe(217n);
+        if (cell.presence === 'none') expect(cell.pathCount).toBe(0n);
+        if (cell.presence === 'some') {
+          expect(cell.pathCount > 0n && cell.pathCount < 217n).toBe(true);
+        }
+      }
+      expect(sum).toBe(217n);
+    }
+    // 规范方案的每步区间在对应深度必须确实出现（计数 > 0）。
+    r.canonical.steps.forEach((step, depth) => {
+      const cell = r.matrix[depth].intervals.find(
+        (c) => c.start === step.start && c.end === step.end,
+      );
+      expect(cell).toBeDefined();
+      expect(cell!.pathCount > 0n).toBe(true);
+    });
+  });
+});
+
 describe('校验：合并反馈且拒绝非法排列', () => {
   it('重复绝对值被拒绝', () => {
     const r = validatePermutation('1 1 3');
