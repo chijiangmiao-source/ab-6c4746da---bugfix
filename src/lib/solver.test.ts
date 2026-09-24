@@ -51,10 +51,30 @@ function bruteForce(values: number[]): {
   }
   const distance = goal;
 
-  // DFS 只走能保持最短性的边，枚举全部最短方案（n<=3 时规模很小）
+  // 反向 BFS：用于把 DFS 限制在最短 DAG 上，否则同层死端前缀会令 n=7 的
+  // 枚举指数膨胀（死端状态不流向目标，不应计入最短方案）。
+  const distR = new Map<number, number>([[goalCode, 0]]);
+  const reverseQueue = [goalCode];
+  for (let head = 0; head < reverseQueue.length; head += 1) {
+    const code = reverseQueue[head];
+    const d = distR.get(code)!;
+    const cur: number[] = [];
+    for (let k = 0; k < n; k += 1) cur.push(((code >>> (4 * k)) & 0x0f) - 1);
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i; j < n; j += 1) {
+        const nx = encodeState(applyInversion(cur, i, j));
+        if (!distR.has(nx)) {
+          distR.set(nx, d + 1);
+          reverseQueue.push(nx);
+        }
+      }
+    }
+  }
+
+  // DFS 只走最短 DAG 上的边（distF[u]+1+distR[v]==distance），枚举全部最短方案
   let total = 0;
   let lexicographicMin: InversionStep[] | null = null;
-  const walk = (tokens: number[], d: number[], path: InversionStep[]) => {
+  const walk = (tokens: number[], path: InversionStep[]) => {
     const code = encodeState(tokens);
     if (code === goalCode) {
       total += 1;
@@ -66,19 +86,20 @@ function bruteForce(values: number[]): {
       }
       return;
     }
+    const d = dist.get(code)!;
     for (let i = 0; i < n; i += 1) {
       for (let j = i; j < n; j += 1) {
         const nx = applyInversion(tokens, i, j);
         const nxCode = encodeState(nx);
-        if (dist.get(nxCode) === dist.get(code)! + 1 && dist.get(nxCode)! <= distance) {
+        if (distR.get(nxCode) === distance - d - 1) {
           path.push({ start: i + 1, end: j + 1 });
-          walk(nx, d, path);
+          walk(nx, path);
           path.pop();
         }
       }
     }
   };
-  walk(start, [], []);
+  walk(start, []);
   return { distance, total, lexicographicMin: lexicographicMin! };
 }
 
@@ -115,6 +136,82 @@ describe('需求用例 [1,-3,-2,4]', () => {
     expect(r.canonical.steps).toEqual([{ start: 2, end: 3 }]);
     expect(signedOf(r.canonical.states[1])).toEqual([1, 2, 3, 4]);
   });
+});
+
+describe('七标记回归用例 [+7,-5,-3,-2,-4,-6,+1]', () => {
+  // 修复前实现为贪心单链，曾把本排列误报为 8 步、方案数 1。
+  const values = [7, -5, -3, -2, -4, -6, 1];
+  const expectedSteps: InversionStep[] = [
+    { start: 1, end: 2 },
+    { start: 1, end: 1 },
+    { start: 2, end: 7 },
+    { start: 2, end: 4 },
+    { start: 3, end: 6 },
+    { start: 1, end: 5 },
+  ];
+
+  it('最少 6 步、全部最短方案精确为 217', () => {
+    const r = solve(tokensOf(values));
+    expect(r.distance).toBe(6);
+    expect(r.totalPaths).toBe(217n);
+  });
+
+  it('规范倒位序列为 [1,2],[1,1],[2,7],[2,4],[3,6],[1,5]', () => {
+    const r = solve(tokensOf(values));
+    expect(r.canonical.steps).toEqual(expectedSteps);
+  });
+
+  it('规范轨迹逐步可行，每一步执行后最终到达全正顺序', () => {
+    const r = solve(tokensOf(values));
+    expect(r.canonical.states).toHaveLength(7);
+    expect(signedOf(r.canonical.states[0])).toEqual(values);
+    let cur = tokensOf(values);
+    for (let k = 0; k < expectedSteps.length; k += 1) {
+      const s = expectedSteps[k];
+      // states[k+1] 必须正是在 states[k] 上执行第 k 步的结果。
+      cur = applyInversion(cur, s.start - 1, s.end - 1);
+      expect(signedOf(r.canonical.states[k + 1])).toEqual(signedOf(cur));
+    }
+    expect(signedOf(cur)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('矩阵重新基于全部 217 条最短方案：6 层且每层各区间计数之和均为 217', () => {
+    const r = solve(tokensOf(values));
+    expect(r.matrix).toHaveLength(6);
+    for (const layer of r.matrix) {
+      let sum = 0n;
+      for (const cell of layer.intervals) {
+        // 计数不超过总数，且 presence 标记与计数一致。
+        expect(cell.pathCount >= 0n).toBe(true);
+        expect(cell.pathCount <= r.totalPaths).toBe(true);
+        if (cell.pathCount === 0n) expect(cell.presence).toBe('none');
+        else if (cell.pathCount === r.totalPaths) expect(cell.presence).toBe('all');
+        else expect(cell.presence).toBe('some');
+        sum += cell.pathCount;
+      }
+      expect(sum).toBe(217n);
+    }
+  });
+
+  it('规范轨迹上的每步倒位在对应深度的矩阵格中计数为正', () => {
+    const r = solve(tokensOf(values));
+    for (let k = 0; k < expectedSteps.length; k += 1) {
+      const s = expectedSteps[k];
+      const cell = r.matrix[k].intervals.find(
+        (c) => c.start === s.start && c.end === s.end,
+      )!;
+      expect(cell).toBeDefined();
+      expect(cell.pathCount > 0n).toBe(true);
+    }
+  });
+
+  it('与独立暴力枚举交叉验证：距离、总数、规范字典序完全一致', () => {
+    const r = solve(tokensOf(values));
+    const b = bruteForce(values);
+    expect(r.distance).toBe(b.distance);
+    expect(r.totalPaths).toBe(BigInt(b.total));
+    expect(r.canonical.steps).toEqual(b.lexicographicMin);
+  }, 120000);
 });
 
 describe('校验：合并反馈且拒绝非法排列', () => {
